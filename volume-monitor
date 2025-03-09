@@ -1,0 +1,209 @@
+#!/usr/bin/python
+
+import asyncio
+import math
+import pulsectl as pa
+import pulsectl_asyncio as pasync
+import signal
+
+from contextlib import asynccontextmanager, suppress
+from dataclasses import dataclass
+from dbus_next.aio import MessageBus, ProxyInterface
+from dbus_next import Variant
+from functools import partial
+from statistics import mean
+from typing import Any, Generic, Optional, overload, TypeVar
+
+
+@dataclass
+class State:
+    T = TypeVar('T')
+
+    @dataclass
+    class Sink:
+        name: str
+        mute: int
+        volume: list[float]
+
+    @dataclass
+    class Notification:
+        id: int
+
+    class Storage(Generic[T]):
+        def __init__(self) -> None:
+            self._v: dict[str, State.T] = {}
+
+        def get(self, name: str, default: Optional["State.T"] = None) -> Optional["State.T"]:
+            return self._v.get(name, default)
+
+        def set(self, name: str, value: "State.T") -> None:
+            self._v[name] = value
+
+    sinks: Storage["State.Sink"] = Storage()
+    notifications: Storage["State.Notification"] = Storage()
+
+
+class Notifier:
+    _BUS_NAME = "org.freedesktop.Notifications"
+    _PATH = "/org/freedesktop/Notifications"
+    _DEFAULT_ICON = "audio-ready"
+
+    class Client:
+        def __init__(self, state: State, notifier: ProxyInterface) -> None:
+            self._notifier = notifier
+            self._state = state
+
+        async def send(self, summary: str,
+                       app_name: str | None = None,
+                       body: str | None = None,
+                       icon: str | None = None,
+                       progress: int | None = None,
+                       type: str = "default",
+                       timeout: int = 2000) -> State.Notification:
+            hints: dict[str, Variant] = {}
+            if progress is not None:
+                hints["value"] = Variant('i', progress)
+
+            replaces_id = 0
+
+            last_notification = self._state.notifications.get(type)
+            if last_notification is not None:
+                replaces_id = last_notification.id
+
+            id = await self._notifier.call_notify(
+                    app_name or "Volume Monitor",
+                    replaces_id,
+                    icon or Notifier._DEFAULT_ICON,
+                    summary,
+                    body or "",
+                    [],
+                    hints,
+                    timeout,
+            )
+
+            notification = State.Notification(id)
+            self._state.notifications.set(type, notification)
+            return notification
+
+    def __init__(self, state: State, bus: MessageBus):
+        self._bus = bus
+        self._state = state
+
+    @asynccontextmanager
+    async def get(self) -> None:
+        introspection = await self._bus.introspect(self._BUS_NAME, self._PATH)
+        obj = self._bus.get_proxy_object(self._BUS_NAME, self._PATH, introspection)
+        interface = obj.get_interface("org.freedesktop.Notifications")
+
+        yield Notifier.Client(self._state, interface)
+
+
+def pa_sink_display_value(values: [float]) -> str:
+    def display(v: int) -> str:
+        return str(round(v * 100)) + "%"
+
+    if all(math.isclose(values[0], v) for v in values):
+        return display(values[0])
+
+    return "[" + ", ".join(map(display, values)) + "]"
+
+
+async def pa_sink(pulse: pasync.PulseAsync, notifier: Notifier.Client, state: State,
+                  index: int, event: pa.PulseEventTypeEnum) -> None:
+    sink = None
+
+    with suppress(pa.pulsectl.PulseIndexError):
+        if (sink := await pulse.sink_info(index)) is None:
+            return
+
+    assert sink is not None
+
+    last = state.sinks.get(sink.name)
+
+    async def send(**kwargs: str | int) -> None:
+        state.sinks.set(sink.name, State.Sink(sink.name, sink.mute, sink.volume.values))
+        await notifier.send(sink.description, type = sink.name, **kwargs)
+
+    if (sink.mute and (last is None or not last.mute)):
+        await send(body = "Audio muted", icon = "audio-volume-muted")
+        return
+
+    if (not sink.mute and (last is None or last.mute)):
+        await send(body = f"Audio unmuted", icon = "audio-volume-muted")
+        return
+
+    if (last is not None and sink.volume.values == last.volume):
+        return
+
+    volume = mean(sink.volume.values)
+    icon = (
+        "audio-volume-high" if volume > 0.66 else
+        "audio-volume-medium" if volume > 0.33 else
+        "audio-volume-low"
+    )
+
+    await send(
+            body = f"Volume {pa_sink_display_value(sink.volume.values)}",
+            icon = icon,
+            progress = round(volume * 100),
+    )
+
+
+async def pa_card(pulse: pasync.PulseAsync, notifier: Notifier.Client, state: State,
+                  index: int, event: pa.PulseEventTypeEnum) -> None:
+    card = None
+    with suppress(pa.pulsectl.PulseIndexError):
+        if (card := await pulse.card_info(index)) is None:
+            return
+
+    assert card is not None
+
+    icon = "audio-on"
+    event_to_text = {
+            pa.PulseEventTypeEnum.new: "New",
+            pa.PulseEventTypeEnum.change: "Change",
+            pa.PulseEventTypeEnum.remove: "Remove",
+    }
+
+    text = event_to_text[event]
+
+    await notifier.send(
+            text,
+            body = card.name,
+            icon = icon,
+            type = card.name,
+            timeout = 5000,
+    )
+
+
+async def pulse_listen() -> None:
+    dbus = await MessageBus().connect()
+    state = State()
+
+    async with pasync.PulseAsync("volmon") as pulse, \
+            pasync.PulseAsync("event-printer") as ev, \
+            Notifier(state, dbus).get() as notifier:
+
+        for sink in await pulse.sink_list():
+            state.sinks.set(sink.name, State.Sink(sink.name, sink.mute, sink.volume.values))
+
+        async for event in ev.subscribe_events("all"):
+            if event.facility == pa.PulseEventFacilityEnum.sink:
+                await pa_sink(pulse, notifier, state, event.index, event.t)
+            elif event.facility == pa.PulseEventFacilityEnum.card:
+                await pa_card(pulse, notifier, state, event.index, event.t)
+
+
+async def main() -> None:
+    listener = asyncio.create_task(pulse_listen())
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, listener.cancel)
+
+    with suppress(asyncio.CancelledError):
+        await listener
+
+
+if __name__ == "__main__":
+    loop = asyncio.new_event_loop()
+    loop.run_until_complete(main())
