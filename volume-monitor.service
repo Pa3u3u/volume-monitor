@@ -1,0 +1,12 @@
+[Unit]
+Description=Show notifications when volume changes
+After=pulseaudio.service
+Requires=pulseaudio.service
+PartOf=pulseaudio.service
+
+[Service]
+ExecStart=/usr/bin/volume-monitor
+Type=exec
+
+[Install]
+WantedBy=default.target
