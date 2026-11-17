@@ -6,13 +6,13 @@ import pulsectl as pa
 import pulsectl_asyncio as pasync
 import signal
 
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from dbus_next.aio import MessageBus, ProxyInterface
 from dbus_next import Variant
-from functools import partial
 from statistics import mean
-from typing import Any, Generic, Optional, overload, TypeVar
+from typing import Generic, Optional, TypeVar
 
 
 @dataclass
@@ -100,7 +100,7 @@ class Notifier:
         self._state = state
 
     @asynccontextmanager
-    async def get(self) -> None:
+    async def get(self) -> AsyncIterator["Notifier.Client"]:
         introspection = await self._bus.introspect(self._BUS_NAME, self._PATH)
         obj = self._bus.get_proxy_object(self._BUS_NAME, self._PATH, introspection)
         interface = obj.get_interface("org.freedesktop.Notifications")
@@ -108,8 +108,8 @@ class Notifier:
         yield Notifier.Client(self._state, interface)
 
 
-def pa_sink_display_value(values: [float]) -> str:
-    def display(v: int) -> str:
+def pa_sink_display_value(values: list[float]) -> str:
+    def display(v: float) -> str:
         return str(round(v * 100)) + "%"
 
     if all(math.isclose(values[0], v) for v in values):
@@ -152,7 +152,7 @@ async def pa_sink(pulse: pasync.PulseAsync, notifier: Notifier.Client, state: St
         return
 
     if (not sink.mute and last is not None and last.mute):
-        await send(body = f"Audio unmuted", icon = pa_sink_volume_icon(volume))
+        await send(body = "Audio unmuted", icon = pa_sink_volume_icon(volume))
         return
 
     if (last is not None and sink.volume.values == last.volume):
