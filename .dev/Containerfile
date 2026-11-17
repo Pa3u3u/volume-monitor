@@ -1,0 +1,20 @@
+FROM localhost/claude-dev-python
+
+USER root
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libpulse0 \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt /tmp/build/requirements.txt
+RUN python3 -m venv /opt/venv \
+ && /opt/venv/bin/pip install --no-cache-dir -r /tmp/build/requirements.txt \
+ && rm -rf /tmp/build \
+ && chown -R agent:agent /opt/venv
+
+ENV PATH=/opt/venv/bin:$PATH
+
+USER agent
+
+# For uv projects pinning a Python the base doesn't carry, e.g.:
+#RUN uv python install 3.14
