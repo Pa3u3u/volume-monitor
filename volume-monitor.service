@@ -1,12 +1,12 @@
 [Unit]
 Description=Show notifications when volume changes
-After=pulseaudio.service
-Requires=pulseaudio.service
-PartOf=pulseaudio.service
+After=pulseaudio.socket pipewire-pulse.socket
 
 [Service]
 ExecStart=/usr/bin/volume-monitor
 Type=exec
+Restart=always
+RestartSec=5
 
 [Install]
 WantedBy=default.target

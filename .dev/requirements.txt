@@ -1,0 +1,5 @@
+# One requirement per line, e.g.:
+#requests
+pulsectl
+pulsectl-asyncio
+dbus-next
