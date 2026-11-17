@@ -216,6 +216,7 @@ async def pulse_listen() -> None:
 async def main() -> None:
     listener = asyncio.create_task(pulse_listen())
 
+    loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, listener.cancel)
 
@@ -224,5 +225,4 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    loop = asyncio.new_event_loop()
-    loop.run_until_complete(main())
+    asyncio.run(main())
