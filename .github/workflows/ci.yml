@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  RUFF_VERSION: "0.12.0"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  lint:
+    if: github.ref_type != 'tag' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: pip install "ruff==$RUFF_VERSION"
+      - run: ruff check volume-monitor
+
+  test:
+    needs: lint
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: .dev/requirements.txt
+      - run: sudo apt-get update -qq && sudo apt-get install -qq --yes --no-install-recommends libpulse0
+      - run: pip install -r .dev/requirements.txt
+      - run: python -c 'import runpy; runpy.run_path("volume-monitor", run_name="volume_monitor")'
+      - run: python -c 'import pulsectl; pulsectl.PulseCardInfo; pulsectl.pulsectl.PulseIndexError'
+
+  release:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - run: |
+          echo "$RELEASE_TAG" | grep -Eq '^v[0-9]+(\.[0-9]+){1,2}$' || {
+            echo "RELEASE_TAG must look like v1.2.3, got '$RELEASE_TAG'." >&2
+            exit 1
+          }
+      - run: gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$RELEASE_TAG" --notes "Release $RELEASE_TAG"
