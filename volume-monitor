@@ -7,7 +7,7 @@ import pulsectl_asyncio as pasync
 import signal
 
 from contextlib import asynccontextmanager, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from dbus_next.aio import MessageBus, ProxyInterface
 from dbus_next import Variant
 from functools import partial
@@ -39,8 +39,8 @@ class State:
         def set(self, name: str, value: "State.T") -> None:
             self._v[name] = value
 
-    sinks: Storage["State.Sink"] = Storage()
-    notifications: Storage["State.Notification"] = Storage()
+    sinks: Storage["State.Sink"] = field(default_factory=Storage)
+    notifications: Storage["State.Notification"] = field(default_factory=Storage)
 
 
 class Notifier:
