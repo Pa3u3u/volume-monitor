@@ -197,7 +197,7 @@ async def pulse_listen() -> None:
     state = State()
 
     async with pasync.PulseAsync("volmon") as pulse, \
-            pasync.PulseAsync("event-printer") as ev, \
+            pasync.PulseAsync("volmon-events") as ev, \
             Notifier(state, dbus).get() as notifier:
 
         for sink in await pulse.sink_list():
