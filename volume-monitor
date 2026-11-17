@@ -126,7 +126,7 @@ async def pa_sink(pulse: pasync.PulseAsync, notifier: Notifier.Client, state: St
     except pa.pulsectl.PulseIndexError:
         return
 
-    last = state.sinks.get(sink.name)
+    last = None if event == pa.PulseEventTypeEnum.new else state.sinks.get(sink.name)
     volume = mean(sink.volume.values)
 
     async def send(**kwargs: str | int) -> None:
@@ -137,7 +137,7 @@ async def pa_sink(pulse: pasync.PulseAsync, notifier: Notifier.Client, state: St
         await send(body = "Audio muted", icon = "audio-volume-muted")
         return
 
-    if (not sink.mute and (last is None or last.mute)):
+    if (not sink.mute and last is not None and last.mute):
         await send(body = f"Audio unmuted", icon = pa_sink_volume_icon(volume))
         return
 
