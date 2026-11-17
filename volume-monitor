@@ -17,7 +17,8 @@ from typing import Any, Generic, Optional, overload, TypeVar
 
 @dataclass
 class State:
-    T = TypeVar('T')
+    K = TypeVar('K')
+    V = TypeVar('V')
 
     @dataclass
     class Sink:
@@ -26,21 +27,30 @@ class State:
         volume: list[float]
 
     @dataclass
+    class Card:
+        name: str
+        description: str
+
+    @dataclass
     class Notification:
         id: int
 
-    class Storage(Generic[T]):
+    class Storage(Generic[K, V]):
         def __init__(self) -> None:
-            self._v: dict[str, State.T] = {}
+            self._v: dict["State.K", "State.V"] = {}
 
-        def get(self, name: str, default: Optional["State.T"] = None) -> Optional["State.T"]:
-            return self._v.get(name, default)
+        def get(self, key: "State.K", default: Optional["State.V"] = None) -> Optional["State.V"]:
+            return self._v.get(key, default)
 
-        def set(self, name: str, value: "State.T") -> None:
-            self._v[name] = value
+        def set(self, key: "State.K", value: "State.V") -> None:
+            self._v[key] = value
 
-    sinks: Storage["State.Sink"] = field(default_factory=Storage)
-    notifications: Storage["State.Notification"] = field(default_factory=Storage)
+        def pop(self, key: "State.K") -> Optional["State.V"]:
+            return self._v.pop(key, None)
+
+    sinks: Storage[str, "State.Sink"] = field(default_factory=Storage)
+    cards: Storage[int, "State.Card"] = field(default_factory=Storage)
+    notifications: Storage[str, "State.Notification"] = field(default_factory=Storage)
 
 
 class Notifier:
@@ -116,6 +126,10 @@ def pa_sink_volume_icon(volume: float) -> str:
     )
 
 
+def pa_card_state(card: "pa.PulseCardInfo") -> State.Card:
+    return State.Card(card.name, card.proplist.get("device.description", card.name))
+
+
 async def pa_sink(pulse: pasync.PulseAsync, notifier: Notifier.Client, state: State,
                   index: int, event: pa.PulseEventTypeEnum) -> None:
     if event == pa.PulseEventTypeEnum.remove:
@@ -153,24 +167,26 @@ async def pa_sink(pulse: pasync.PulseAsync, notifier: Notifier.Client, state: St
 
 async def pa_card(pulse: pasync.PulseAsync, notifier: Notifier.Client, state: State,
                   index: int, event: pa.PulseEventTypeEnum) -> None:
-    try:
-        card = await pulse.card_info(index)
-    except pa.pulsectl.PulseIndexError:
-        return
+    if event == pa.PulseEventTypeEnum.remove:
+        if (card := state.cards.pop(index)) is None:
+            return
+    else:
+        try:
+            card = pa_card_state(await pulse.card_info(index))
+        except pa.pulsectl.PulseIndexError:
+            return
+        state.cards.set(index, card)
 
-    icon = "audio-on"
     event_to_text = {
             pa.PulseEventTypeEnum.new: "New",
             pa.PulseEventTypeEnum.change: "Change",
             pa.PulseEventTypeEnum.remove: "Remove",
     }
 
-    text = event_to_text[event]
-
     await notifier.send(
-            text,
-            body = card.name,
-            icon = icon,
+            event_to_text[event],
+            body = card.description,
+            icon = "audio-on",
             type = card.name,
             timeout = 5000,
     )
@@ -186,6 +202,9 @@ async def pulse_listen() -> None:
 
         for sink in await pulse.sink_list():
             state.sinks.set(sink.name, State.Sink(sink.name, sink.mute, sink.volume.values))
+
+        for card in await pulse.card_list():
+            state.cards.set(card.index, pa_card_state(card))
 
         async for event in ev.subscribe_events("all"):
             if event.facility == pa.PulseEventFacilityEnum.sink:
