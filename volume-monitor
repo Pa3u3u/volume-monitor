@@ -108,6 +108,14 @@ def pa_sink_display_value(values: [float]) -> str:
     return "[" + ", ".join(map(display, values)) + "]"
 
 
+def pa_sink_volume_icon(volume: float) -> str:
+    return (
+        "audio-volume-high" if volume > 0.66 else
+        "audio-volume-medium" if volume > 0.33 else
+        "audio-volume-low"
+    )
+
+
 async def pa_sink(pulse: pasync.PulseAsync, notifier: Notifier.Client, state: State,
                   index: int, event: pa.PulseEventTypeEnum) -> None:
     if event == pa.PulseEventTypeEnum.remove:
@@ -119,6 +127,7 @@ async def pa_sink(pulse: pasync.PulseAsync, notifier: Notifier.Client, state: St
         return
 
     last = state.sinks.get(sink.name)
+    volume = mean(sink.volume.values)
 
     async def send(**kwargs: str | int) -> None:
         state.sinks.set(sink.name, State.Sink(sink.name, sink.mute, sink.volume.values))
@@ -129,22 +138,15 @@ async def pa_sink(pulse: pasync.PulseAsync, notifier: Notifier.Client, state: St
         return
 
     if (not sink.mute and (last is None or last.mute)):
-        await send(body = f"Audio unmuted", icon = "audio-volume-muted")
+        await send(body = f"Audio unmuted", icon = pa_sink_volume_icon(volume))
         return
 
     if (last is not None and sink.volume.values == last.volume):
         return
 
-    volume = mean(sink.volume.values)
-    icon = (
-        "audio-volume-high" if volume > 0.66 else
-        "audio-volume-medium" if volume > 0.33 else
-        "audio-volume-low"
-    )
-
     await send(
             body = f"Volume {pa_sink_display_value(sink.volume.values)}",
-            icon = icon,
+            icon = pa_sink_volume_icon(volume),
             progress = round(volume * 100),
     )
 
