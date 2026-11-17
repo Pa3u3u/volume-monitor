@@ -110,13 +110,13 @@ def pa_sink_display_value(values: [float]) -> str:
 
 async def pa_sink(pulse: pasync.PulseAsync, notifier: Notifier.Client, state: State,
                   index: int, event: pa.PulseEventTypeEnum) -> None:
-    sink = None
+    if event == pa.PulseEventTypeEnum.remove:
+        return
 
-    with suppress(pa.pulsectl.PulseIndexError):
-        if (sink := await pulse.sink_info(index)) is None:
-            return
-
-    assert sink is not None
+    try:
+        sink = await pulse.sink_info(index)
+    except pa.pulsectl.PulseIndexError:
+        return
 
     last = state.sinks.get(sink.name)
 
@@ -151,12 +151,10 @@ async def pa_sink(pulse: pasync.PulseAsync, notifier: Notifier.Client, state: St
 
 async def pa_card(pulse: pasync.PulseAsync, notifier: Notifier.Client, state: State,
                   index: int, event: pa.PulseEventTypeEnum) -> None:
-    card = None
-    with suppress(pa.pulsectl.PulseIndexError):
-        if (card := await pulse.card_info(index)) is None:
-            return
-
-    assert card is not None
+    try:
+        card = await pulse.card_info(index)
+    except pa.pulsectl.PulseIndexError:
+        return
 
     icon = "audio-on"
     event_to_text = {
